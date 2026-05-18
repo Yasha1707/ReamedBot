@@ -4,6 +4,7 @@
 import asyncio
 import logging
 import sqlite3
+import calendar
 from datetime import datetime, timedelta
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
@@ -150,15 +151,36 @@ def doctors_keyboard(service_name):
     buttons.append([InlineKeyboardButton(text="🔙 Назад", callback_data="book")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
-def dates_keyboard(doctor_id):
-    today = datetime.now().date()
-    buttons = []
-    for i in range(1, 6):
-        d = today + timedelta(days=i)
-        if d.weekday() < 5:  # только рабочие
-            buttons.append([InlineKeyboardButton(text=d.strftime("%d.%m.%Y"), callback_data=f"date_{d.year}_{d.month}_{d.day}_{doctor_id}")])
-    buttons.append([InlineKeyboardButton(text="🔙 Назад", callback_data="book")])
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
+def calendar_keyboard(year, month, doctor_id):
+    now = datetime.now().date()
+    cal = calendar.monthcalendar(year, month)
+    kb_buttons = []
+    for week in cal:
+        row = []
+        for day in week:
+            if day == 0:
+                row.append(InlineKeyboardButton(text=" ", callback_data="ignore"))
+            else:
+                date_obj = datetime(year, month, day).date()
+                # исключаем прошлые дни и выходные
+                if date_obj < now or date_obj.weekday() >= 5:
+                    row.append(InlineKeyboardButton(text=f"{day}", callback_data="ignore"))
+                else:
+                    row.append(InlineKeyboardButton(text=f"{day}", callback_data=f"date_{year}_{month}_{day}_{doctor_id}"))
+        kb_buttons.append(row)
+    # навигация
+    prev_month = month - 1 if month > 1 else 12
+    prev_year = year if month > 1 else year - 1
+    next_month = month + 1 if month < 12 else 1
+    next_year = year if month < 12 else year + 1
+    row_nav = [
+        InlineKeyboardButton(text="◀️", callback_data=f"cal_{prev_year}_{prev_month}_{doctor_id}"),
+        InlineKeyboardButton(text=f"{month}/{year}", callback_data="ignore"),
+        InlineKeyboardButton(text="▶️", callback_data=f"cal_{next_year}_{next_month}_{doctor_id}")
+    ]
+    kb_buttons.append(row_nav)
+    kb_buttons.append([InlineKeyboardButton(text="🔙 Назад", callback_data="book")])
+    return InlineKeyboardMarkup(inline_keyboard=kb_buttons)
 
 def time_keyboard():
     times = ['09:00', '10:00', '11:00', '12:00', '14:00', '15:00', '16:00']
@@ -237,9 +259,19 @@ async def doctor_chosen(callback: CallbackQuery, state: FSMContext):
     doctor_id = int(callback.data.split("doctor_")[1])
     doctor = get_doctor_by_id(doctor_id)
     await state.update_data(doctor_id=doctor_id, doctor_name=doctor[1])
-    kb = dates_keyboard(doctor_id)
+    now = datetime.now()
+    kb = calendar_keyboard(now.year, now.month, doctor_id)
     await state.set_state(BookingState.choosing_date)
-    await callback.message.edit_text(f"Врач: {doctor[1]}\nВыберите дату:", reply_markup=kb)
+    await callback.message.edit_text(f"Врач: {doctor[1]}\nВыберите дату (календарь, только рабочие дни, 30 дней вперёд):", reply_markup=kb)
+
+@dp.callback_query(lambda c: c.data.startswith("cal_"))
+async def calendar_nav(callback: CallbackQuery, state: FSMContext):
+    parts = callback.data.split("_")
+    year = int(parts[1])
+    month = int(parts[2])
+    doctor_id = int(parts[3])
+    kb = calendar_keyboard(year, month, doctor_id)
+    await callback.message.edit_reply_markup(reply_markup=kb)
 
 @dp.callback_query(BookingState.choosing_date, lambda c: c.data.startswith("date_"))
 async def date_chosen(callback: CallbackQuery, state: FSMContext):
