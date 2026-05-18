@@ -8,7 +8,7 @@ import calendar
 from datetime import datetime, timedelta
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, ReplyKeyboardMarkup, KeyboardButton
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -30,7 +30,8 @@ def init_db():
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         phone TEXT UNIQUE,
         role TEXT DEFAULT 'patient',
-        name TEXT
+        name TEXT,
+        chat_id INTEGER UNIQUE
     )''')
     cur.execute('''CREATE TABLE IF NOT EXISTS doctors (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -95,19 +96,19 @@ init_db()
 populate_initial_data()
 
 # ==================== РАБОТА С БАЗОЙ ====================
-def get_user_by_phone(phone):
+def get_user_by_chat_id(chat_id):
     conn = sqlite3.connect(DB_NAME)
     cur = conn.cursor()
-    cur.execute("SELECT id, role, name FROM users WHERE phone=?", (phone,))
+    cur.execute("SELECT id, role, name, phone FROM users WHERE chat_id=?", (chat_id,))
     row = cur.fetchone()
     conn.close()
     return row
 
-def register_user(phone, name=None):
+def register_user(chat_id, phone, name=None):
     conn = sqlite3.connect(DB_NAME)
     cur = conn.cursor()
     try:
-        cur.execute("INSERT INTO users (phone, role, name) VALUES (?, 'patient', ?)", (phone, name))
+        cur.execute("INSERT INTO users (chat_id, phone, role, name) VALUES (?, ?, 'patient', ?)", (chat_id, phone, name))
         user_id = cur.lastrowid
         conn.commit()
         conn.close()
@@ -115,6 +116,21 @@ def register_user(phone, name=None):
     except:
         conn.close()
         return None
+
+def get_user_by_phone(phone):
+    conn = sqlite3.connect(DB_NAME)
+    cur = conn.cursor()
+    cur.execute("SELECT id, role, name, chat_id FROM users WHERE phone=?", (phone,))
+    row = cur.fetchone()
+    conn.close()
+    return row
+
+def update_user_chat_id(phone, chat_id):
+    conn = sqlite3.connect(DB_NAME)
+    cur = conn.cursor()
+    cur.execute("UPDATE users SET chat_id=? WHERE phone=?", (chat_id, phone))
+    conn.commit()
+    conn.close()
 
 def get_doctor_by_id(doc_id):
     conn = sqlite3.connect(DB_NAME)
@@ -143,7 +159,6 @@ def get_free_slots(doctor_id, date_str):
 def create_appointment(user_id, doctor_id, service, date_str, time_str):
     conn = sqlite3.connect(DB_NAME)
     cur = conn.cursor()
-    # Проверка слота
     cur.execute("SELECT id FROM slots WHERE doctor_id=? AND date=? AND time=? AND is_free=1", (doctor_id, date_str, time_str))
     slot = cur.fetchone()
     if not slot:
@@ -238,6 +253,14 @@ def time_slots_keyboard(slots):
     buttons.append([InlineKeyboardButton(text="🔙 Назад", callback_data="book")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
+def request_contact_keyboard():
+    kb = ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="📞 Поделиться номером", request_contact=True)]],
+        resize_keyboard=True,
+        one_time_keyboard=True
+    )
+    return kb
+
 # ==================== СОСТОЯНИЯ ====================
 class BookingState(StatesGroup):
     choosing_service = State()
@@ -253,28 +276,38 @@ class AdminMarkVisit(StatesGroup):
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
-    # Запрашиваем контакт
-    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="📞 Поделиться номером", request_contact=True)]])
-    await message.answer("Для работы с ботом необходимо поделиться номером телефона.", reply_markup=kb)
+    # Проверим, есть ли уже пользователь с таким chat_id
+    user = get_user_by_chat_id(message.chat.id)
+    if user:
+        role = user[1]
+        await message.answer(f"Добро пожаловать! Ваша роль: {role}", reply_markup=main_menu(role))
+    else:
+        # Запрашиваем контакт обычной reply-клавиатурой
+        await message.answer("Для работы с ботом необходимо поделиться номером телефона. Нажмите кнопку ниже.", reply_markup=request_contact_keyboard())
 
 @dp.message(lambda msg: msg.contact is not None)
 async def handle_contact(message: types.Message):
     phone = message.contact.phone_number
     name = message.contact.first_name
     user = get_user_by_phone(phone)
+    chat_id = message.chat.id
     if not user:
-        user_id = register_user(phone, name)
+        # Регистрируем нового пользователя
+        user_id = register_user(chat_id, phone, name)
         role = 'patient'
     else:
+        # Обновляем chat_id для существующего пользователя
         user_id = user[0]
         role = user[1]
+        update_user_chat_id(phone, chat_id)
     await message.answer(f"Регистрация успешна! Ваша роль: {role}", reply_markup=main_menu(role))
 
 @dp.callback_query(lambda c: c.data == "back_to_menu")
 async def back_to_menu(callback: CallbackQuery):
     # Получаем роль пользователя
-    # Упрощённо: role = 'patient' (можно расширить)
-    await callback.message.edit_text("Главное меню:", reply_markup=main_menu('patient'))
+    user = get_user_by_chat_id(callback.message.chat.id)
+    role = user[1] if user else 'patient'
+    await callback.message.edit_text("Главное меню:", reply_markup=main_menu(role))
 
 @dp.callback_query(lambda c: c.data == "book")
 async def book_start(callback: CallbackQuery, state: FSMContext):
@@ -344,21 +377,27 @@ async def time_chosen(callback: CallbackQuery, state: FSMContext):
 @dp.callback_query(lambda c: c.data == "confirm_yes")
 async def confirm_yes(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
-    # Временно берём пользователя с id=1 (первый зарегистрированный)
-    user_id = 1
+    user = get_user_by_chat_id(callback.message.chat.id)
+    if not user:
+        await callback.message.answer("Ошибка: пользователь не найден.")
+        await state.clear()
+        return
+    user_id = user[0]
     result = create_appointment(user_id, data['doctor_id'], data['service'], data['date'], data['time'])
     if result:
         await callback.message.edit_text("✅ Запись подтверждена! Вы получите напоминание за 24 часа.")
     else:
         await callback.message.edit_text("❌ Ошибка: слот уже занят. Попробуйте другое время.")
     await state.clear()
-    await callback.message.answer("Главное меню:", reply_markup=main_menu('patient'))
+    await callback.message.answer("Главное меню:", reply_markup=main_menu(user[1]))
 
 @dp.callback_query(lambda c: c.data == "confirm_no")
 async def confirm_no(callback: CallbackQuery, state: FSMContext):
     await state.clear()
     await callback.message.edit_text("Запись отменена.")
-    await callback.message.answer("Главное меню:", reply_markup=main_menu('patient'))
+    user = get_user_by_chat_id(callback.message.chat.id)
+    role = user[1] if user else 'patient'
+    await callback.message.answer("Главное меню:", reply_markup=main_menu(role))
 
 @dp.callback_query(lambda c: c.data == "today_schedule")
 async def today_schedule(callback: CallbackQuery):
@@ -414,7 +453,11 @@ async def report_start(callback: CallbackQuery):
 
 @dp.callback_query(lambda c: c.data == "my_appointments")
 async def my_appointments(callback: CallbackQuery):
-    user_id = 1   # временно
+    user = get_user_by_chat_id(callback.message.chat.id)
+    if not user:
+        await callback.message.answer("Ошибка: пользователь не найден.")
+        return
+    user_id = user[0]
     conn = sqlite3.connect(DB_NAME)
     cur = conn.cursor()
     cur.execute('''SELECT a.id, d.name, a.date, a.time, a.status
@@ -432,7 +475,13 @@ async def my_appointments(callback: CallbackQuery):
 
 @dp.callback_query(lambda c: c.data == "my_schedule")
 async def doctor_schedule(callback: CallbackQuery):
-    doctor_id = 1   # временно
+    user = get_user_by_chat_id(callback.message.chat.id)
+    if not user or user[1] != 'doctor':
+        await callback.message.answer("Доступно только врачам.")
+        return
+    # Найдём doctor_id по имени врача (упрощённо: можно связать users и doctors)
+    # Сейчас допустим, что doctor_id = 1 для демонстрации
+    doctor_id = 1
     today = datetime.now().strftime("%Y-%m-%d")
     conn = sqlite3.connect(DB_NAME)
     cur = conn.cursor()
@@ -449,34 +498,7 @@ async def doctor_schedule(callback: CallbackQuery):
             text += f"{r[0]} - {r[1]} (статус: {r[2]})\n"
         await callback.message.answer(text)
 
-# ==================== НАПОМИНАНИЯ ====================
-async def reminders_checker():
-    while True:
-        now = datetime.now()
-        target_time = (now + timedelta(days=1)).replace(hour=9, minute=0, second=0, microsecond=0)
-        wait_seconds = (target_time - now).total_seconds()
-        if wait_seconds < 0:
-            wait_seconds = 60
-        await asyncio.sleep(wait_seconds)
-        # Отправка напоминаний
-        tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
-        conn = sqlite3.connect(DB_NAME)
-        cur = conn.cursor()
-        cur.execute('''SELECT a.id, u.phone, u.name, d.name, a.time
-                       FROM appointments a
-                       JOIN users u ON a.user_id=u.id
-                       JOIN doctors d ON a.doctor_id=d.id
-                       WHERE a.date=? AND a.status='confirmed' ''', (tomorrow,))
-        rows = cur.fetchall()
-        conn.close()
-        for row in rows:
-            # Ищем chat_id по номеру телефона (упрощённо, не реализовано хранение chat_id)
-            # В реальном проекте нужно хранить chat_id в таблице users.
-            pass  # Здесь надо доработать
-
-# Запуск
 async def main():
-    asyncio.create_task(reminders_checker())
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
