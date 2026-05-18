@@ -14,7 +14,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 
 # ==================== КОНФИГУРАЦИЯ ====================
-TOKEN = "8717377368:AAE8iF2JrxmLykUxJ5OAEv87S0eE4Y9pNVg"  # Замените на ваш токен, если нужно
+TOKEN = "8717377368:AAE8iF2JrxmLykUxJ5OAEv87S0eE4Y9pNVg"   # замените на ваш токен
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
@@ -26,25 +26,21 @@ DB_NAME = "rehamed.db"
 def init_db():
     conn = sqlite3.connect(DB_NAME)
     cur = conn.cursor()
-    # Таблица пользователей: id, phone, role (patient/admin/doctor/deputy), name
     cur.execute('''CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         phone TEXT UNIQUE,
         role TEXT DEFAULT 'patient',
         name TEXT
     )''')
-    # Таблица врачей
     cur.execute('''CREATE TABLE IF NOT EXISTS doctors (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT,
         service TEXT
     )''')
-    # Таблица услуг (для удобства)
     cur.execute('''CREATE TABLE IF NOT EXISTS services (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT UNIQUE
     )''')
-    # Таблица слотов (доступное время)
     cur.execute('''CREATE TABLE IF NOT EXISTS slots (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         doctor_id INTEGER,
@@ -53,7 +49,6 @@ def init_db():
         is_free INTEGER DEFAULT 1,
         FOREIGN KEY(doctor_id) REFERENCES doctors(id)
     )''')
-    # Таблица записей
     cur.execute('''CREATE TABLE IF NOT EXISTS appointments (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id INTEGER,
@@ -69,7 +64,6 @@ def init_db():
     conn.commit()
     conn.close()
 
-# Заполнение начальными данными (врачи, услуги)
 def populate_initial_data():
     conn = sqlite3.connect(DB_NAME)
     cur = conn.cursor()
@@ -77,7 +71,7 @@ def populate_initial_data():
     services = ['Стоматология', 'УЗИ', 'Терапия', 'Гинекология', 'Неврология', 'Ортодонтия']
     for s in services:
         cur.execute("INSERT OR IGNORE INTO services (name) VALUES (?)", (s,))
-    # Врачи (по вашему списку)
+    # Врачи
     doctors_data = [
         ('Мостовая Наталья Владимировна', 'Неврология'),
         ('Лукашина Наталья Юрьевна', 'Неврология'),
@@ -100,50 +94,7 @@ def populate_initial_data():
 init_db()
 populate_initial_data()
 
-# ==================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ====================
-def get_doctor_by_id(doc_id):
-    conn = sqlite3.connect(DB_NAME)
-    cur = conn.cursor()
-    cur.execute("SELECT id, name, service FROM doctors WHERE id=?", (doc_id,))
-    row = cur.fetchone()
-    conn.close()
-    return row
-
-def get_doctors_by_service(service_name):
-    conn = sqlite3.connect(DB_NAME)
-    cur = conn.cursor()
-    cur.execute("SELECT id, name FROM doctors WHERE service=?", (service_name,))
-    rows = cur.fetchall()
-    conn.close()
-    return rows  # [(id, name), ...]
-
-def get_free_slots(doctor_id, date_str):
-    conn = sqlite3.connect(DB_NAME)
-    cur = conn.cursor()
-    cur.execute("SELECT time FROM slots WHERE doctor_id=? AND date=? AND is_free=1", (doctor_id, date_str))
-    rows = cur.fetchall()
-    conn.close()
-    return [row[0] for row in rows]
-
-def create_appointment(user_id, doctor_id, service, date_str, time_str):
-    conn = sqlite3.connect(DB_NAME)
-    cur = conn.cursor()
-    # Проверяем, не занят ли уже слот (повторная проверка)
-    cur.execute("SELECT id FROM slots WHERE doctor_id=? AND date=? AND time=? AND is_free=1", (doctor_id, date_str, time_str))
-    slot = cur.fetchone()
-    if not slot:
-        conn.close()
-        return False
-    # Бронируем слот
-    cur.execute("UPDATE slots SET is_free=0 WHERE doctor_id=? AND date=? AND time=?", (doctor_id, date_str, time_str))
-    # Создаём запись
-    cur.execute('''INSERT INTO appointments (user_id, doctor_id, service, date, time, status, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)''',
-                (user_id, doctor_id, service, date_str, time_str, 'confirmed', datetime.now().isoformat()))
-    conn.commit()
-    conn.close()
-    return True
-
+# ==================== РАБОТА С БАЗОЙ ====================
 def get_user_by_phone(phone):
     conn = sqlite3.connect(DB_NAME)
     cur = conn.cursor()
@@ -165,15 +116,71 @@ def register_user(phone, name=None):
         conn.close()
         return None
 
+def get_doctor_by_id(doc_id):
+    conn = sqlite3.connect(DB_NAME)
+    cur = conn.cursor()
+    cur.execute("SELECT id, name, service FROM doctors WHERE id=?", (doc_id,))
+    row = cur.fetchone()
+    conn.close()
+    return row
+
+def get_doctors_by_service(service_name):
+    conn = sqlite3.connect(DB_NAME)
+    cur = conn.cursor()
+    cur.execute("SELECT id, name FROM doctors WHERE service=?", (service_name,))
+    rows = cur.fetchall()
+    conn.close()
+    return rows
+
+def get_free_slots(doctor_id, date_str):
+    conn = sqlite3.connect(DB_NAME)
+    cur = conn.cursor()
+    cur.execute("SELECT time FROM slots WHERE doctor_id=? AND date=? AND is_free=1", (doctor_id, date_str))
+    rows = cur.fetchall()
+    conn.close()
+    return [row[0] for row in rows]
+
+def create_appointment(user_id, doctor_id, service, date_str, time_str):
+    conn = sqlite3.connect(DB_NAME)
+    cur = conn.cursor()
+    # Проверка слота
+    cur.execute("SELECT id FROM slots WHERE doctor_id=? AND date=? AND time=? AND is_free=1", (doctor_id, date_str, time_str))
+    slot = cur.fetchone()
+    if not slot:
+        conn.close()
+        return False
+    cur.execute("UPDATE slots SET is_free=0 WHERE doctor_id=? AND date=? AND time=?", (doctor_id, date_str, time_str))
+    cur.execute('''INSERT INTO appointments (user_id, doctor_id, service, date, time, status, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                (user_id, doctor_id, service, date_str, time_str, 'confirmed', datetime.now().isoformat()))
+    conn.commit()
+    conn.close()
+    return True
+
+def add_slot(doctor_id, date_str, time_str):
+    conn = sqlite3.connect(DB_NAME)
+    cur = conn.cursor()
+    cur.execute("INSERT OR IGNORE INTO slots (doctor_id, date, time, is_free) VALUES (?, ?, ?, 1)", (doctor_id, date_str, time_str))
+    conn.commit()
+    conn.close()
+
+def get_user_role(user_id):
+    conn = sqlite3.connect(DB_NAME)
+    cur = conn.cursor()
+    cur.execute("SELECT role FROM users WHERE id=?", (user_id,))
+    row = cur.fetchone()
+    conn.close()
+    return row[0] if row else 'patient'
+
 # ==================== КЛАВИАТУРЫ ====================
 def main_menu(role='patient'):
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📝 Записаться", callback_data="book")],
         [InlineKeyboardButton(text="📋 Мои записи", callback_data="my_appointments")]
     ])
-    if role == 'admin' or role == 'deputy':
+    if role in ('admin', 'deputy'):
         kb.inline_keyboard.append([InlineKeyboardButton(text="📅 Расписание на сегодня", callback_data="today_schedule")])
-        kb.inline_keyboard.append([InlineKeyboardButton(text="✅ Подтвердить визит", callback_data="mark_visited_prompt")])
+        kb.inline_keyboard.append([InlineKeyboardButton(text="✅ Отметить визит", callback_data="mark_visited_prompt")])
     if role == 'deputy':
         kb.inline_keyboard.append([InlineKeyboardButton(text="📊 Отчёт", callback_data="report_start")])
     if role == 'doctor':
@@ -195,7 +202,6 @@ def doctors_keyboard(service_name):
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 def calendar_keyboard(year, month, doctor_id):
-    # Создаём календарь на месяц, исключая субботу и воскресенье, только будущие дни
     now = datetime.now().date()
     cal = calendar.monthcalendar(year, month)
     kb_buttons = []
@@ -206,13 +212,12 @@ def calendar_keyboard(year, month, doctor_id):
                 row.append(InlineKeyboardButton(text=" ", callback_data="ignore"))
             else:
                 date_obj = datetime(year, month, day).date()
-                # Если день в прошлом или выходной (суббота=5, воскресенье=6) – не показываем (делаем заглушку)
-                if date_obj < now or date_obj.weekday() >= 5:
+                if date_obj < now or date_obj.weekday() >= 5:   # выходные – суббота, воскресенье
                     row.append(InlineKeyboardButton(text=f"{day}", callback_data="ignore"))
                 else:
                     row.append(InlineKeyboardButton(text=f"{day}", callback_data=f"date_{year}_{month}_{day}_{doctor_id}"))
         kb_buttons.append(row)
-    # Добавляем стрелки для переключения месяцев
+    # навигация
     prev_month = month - 1 if month > 1 else 12
     prev_year = year if month > 1 else year - 1
     next_month = month + 1 if month < 12 else 1
@@ -233,7 +238,7 @@ def time_slots_keyboard(slots):
     buttons.append([InlineKeyboardButton(text="🔙 Назад", callback_data="book")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
-# ==================== СОСТОЯНИЯ ДЛЯ МАШИНЫ СОСТОЯНИЙ ====================
+# ==================== СОСТОЯНИЯ ====================
 class BookingState(StatesGroup):
     choosing_service = State()
     choosing_doctor = State()
@@ -242,29 +247,16 @@ class BookingState(StatesGroup):
     confirming = State()
 
 class AdminMarkVisit(StatesGroup):
-    waiting_for_appointment_id = State()
+    waiting_for_id = State()
 
 # ==================== ХЭНДЛЕРЫ ====================
 
-# Старт – проверка регистрации и роли
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
-    # Проверяем, зарегистрирован ли пользователь по номеру (позже добавим запрос номера)
-    # Для простоты пока просто спрашиваем номер телефона
-    # Но для демо: создадим тестового пользователя, если нет
-    phone = "placeholder"  # В реальности нужно запросить через Contact
-    user = get_user_by_phone(phone)
-    if not user:
-        # Запросим контакт
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="📞 Поделиться номером", request_contact=True)]
-        ])
-        await message.answer("Для работы с ботом необходимо поделиться номером телефона.", reply_markup=kb)
-    else:
-        role = user[1]
-        await message.answer(f"Добро пожаловать! Ваша роль: {role}", reply_markup=main_menu(role))
+    # Запрашиваем контакт
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="📞 Поделиться номером", request_contact=True)]])
+    await message.answer("Для работы с ботом необходимо поделиться номером телефона.", reply_markup=kb)
 
-# Обработка контакта (придёт после нажатия кнопки «Поделиться номером»)
 @dp.message(lambda msg: msg.contact is not None)
 async def handle_contact(message: types.Message):
     phone = message.contact.phone_number
@@ -278,42 +270,38 @@ async def handle_contact(message: types.Message):
         role = user[1]
     await message.answer(f"Регистрация успешна! Ваша роль: {role}", reply_markup=main_menu(role))
 
-# Главное меню (назад)
 @dp.callback_query(lambda c: c.data == "back_to_menu")
 async def back_to_menu(callback: CallbackQuery):
-    await callback.message.edit_text("Главное меню:", reply_markup=main_menu("patient"))  # упрощённо, нужно извлекать роль из БД
+    # Получаем роль пользователя
+    # Упрощённо: role = 'patient' (можно расширить)
+    await callback.message.edit_text("Главное меню:", reply_markup=main_menu('patient'))
 
-# Начало записи
 @dp.callback_query(lambda c: c.data == "book")
 async def book_start(callback: CallbackQuery, state: FSMContext):
     await state.set_state(BookingState.choosing_service)
     await callback.message.edit_text("Выберите услугу:", reply_markup=services_keyboard())
 
-# Выбор услуги → показываем врачей
 @dp.callback_query(BookingState.choosing_service, lambda c: c.data.startswith("service_"))
 async def service_chosen(callback: CallbackQuery, state: FSMContext):
     service_name = callback.data.split("service_")[1]
     await state.update_data(service=service_name)
     kb = doctors_keyboard(service_name)
-    if kb is None:
+    if not kb:
         await callback.message.edit_text("Нет врачей по данной услуге. Выберите другую.", reply_markup=services_keyboard())
         return
     await state.set_state(BookingState.choosing_doctor)
     await callback.message.edit_text(f"Вы выбрали: {service_name}\nТеперь выберите врача:", reply_markup=kb)
 
-# Выбор врача → показываем календарь
 @dp.callback_query(BookingState.choosing_doctor, lambda c: c.data.startswith("doctor_"))
 async def doctor_chosen(callback: CallbackQuery, state: FSMContext):
     doctor_id = int(callback.data.split("doctor_")[1])
     doctor = get_doctor_by_id(doctor_id)
     await state.update_data(doctor_id=doctor_id, doctor_name=doctor[1])
     now = datetime.now()
-    year, month = now.year, now.month
-    kb = calendar_keyboard(year, month, doctor_id)
+    kb = calendar_keyboard(now.year, now.month, doctor_id)
     await state.set_state(BookingState.choosing_date)
-    await callback.message.edit_text(f"Врач: {doctor[1]}\nВыберите дату (только рабочие дни, нажмите на число):", reply_markup=kb)
+    await callback.message.edit_text(f"Врач: {doctor[1]}\nВыберите дату (только рабочие дни, вперёд на месяц):", reply_markup=kb)
 
-# Переключение месяцев в календаре
 @dp.callback_query(lambda c: c.data.startswith("cal_"))
 async def calendar_nav(callback: CallbackQuery, state: FSMContext):
     parts = callback.data.split("_")
@@ -323,7 +311,6 @@ async def calendar_nav(callback: CallbackQuery, state: FSMContext):
     kb = calendar_keyboard(year, month, doctor_id)
     await callback.message.edit_reply_markup(reply_markup=kb)
 
-# Выбор даты
 @dp.callback_query(BookingState.choosing_date, lambda c: c.data.startswith("date_"))
 async def date_chosen(callback: CallbackQuery, state: FSMContext):
     parts = callback.data.split("_")
@@ -333,7 +320,6 @@ async def date_chosen(callback: CallbackQuery, state: FSMContext):
     doctor_id = int(parts[4])
     date_str = f"{year}-{month:02d}-{day:02d}"
     await state.update_data(date=date_str)
-    # Ищем свободные слоты (пока пустые, нужно добавить тестовые слоты)
     slots = get_free_slots(doctor_id, date_str)
     if not slots:
         await callback.message.answer("На эту дату нет свободных слотов. Попробуйте другую дату.")
@@ -342,7 +328,6 @@ async def date_chosen(callback: CallbackQuery, state: FSMContext):
     await state.set_state(BookingState.choosing_time)
     await callback.message.edit_text(f"Выбрана дата: {date_str}\nДоступное время:", reply_markup=kb)
 
-# Выбор времени
 @dp.callback_query(BookingState.choosing_time, lambda c: c.data.startswith("time_"))
 async def time_chosen(callback: CallbackQuery, state: FSMContext):
     time_str = callback.data.split("time_")[1]
@@ -359,34 +344,32 @@ async def time_chosen(callback: CallbackQuery, state: FSMContext):
 @dp.callback_query(lambda c: c.data == "confirm_yes")
 async def confirm_yes(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
-    user_id = 1  # Временно, потом брать из сессии
+    # Временно берём пользователя с id=1 (первый зарегистрированный)
+    user_id = 1
     result = create_appointment(user_id, data['doctor_id'], data['service'], data['date'], data['time'])
     if result:
         await callback.message.edit_text("✅ Запись подтверждена! Вы получите напоминание за 24 часа.")
     else:
-        await callback.message.edit_text("❌ Ошибка: слот уже занят. Попробуйте выбрать другое время.")
+        await callback.message.edit_text("❌ Ошибка: слот уже занят. Попробуйте другое время.")
     await state.clear()
-    await callback.message.answer("Главное меню:", reply_markup=main_menu("patient"))
+    await callback.message.answer("Главное меню:", reply_markup=main_menu('patient'))
 
 @dp.callback_query(lambda c: c.data == "confirm_no")
 async def confirm_no(callback: CallbackQuery, state: FSMContext):
     await state.clear()
-    await callback.message.edit_text("Запись отменена. Возвращаюсь в главное меню.")
-    await callback.message.answer("Главное меню:", reply_markup=main_menu("patient"))
+    await callback.message.edit_text("Запись отменена.")
+    await callback.message.answer("Главное меню:", reply_markup=main_menu('patient'))
 
-# Команда /today для администратора (вывод списка записей)
 @dp.callback_query(lambda c: c.data == "today_schedule")
 async def today_schedule(callback: CallbackQuery):
     today = datetime.now().strftime("%Y-%m-%d")
     conn = sqlite3.connect(DB_NAME)
     cur = conn.cursor()
-    cur.execute('''
-        SELECT a.id, u.name, d.name, a.time, a.status 
-        FROM appointments a
-        JOIN users u ON a.user_id=u.id
-        JOIN doctors d ON a.doctor_id=d.id
-        WHERE a.date=?
-    ''', (today,))
+    cur.execute('''SELECT a.id, u.name, d.name, a.time, a.status 
+                   FROM appointments a
+                   JOIN users u ON a.user_id=u.id
+                   JOIN doctors d ON a.doctor_id=d.id
+                   WHERE a.date=?''', (today,))
     rows = cur.fetchall()
     conn.close()
     if not rows:
@@ -397,13 +380,12 @@ async def today_schedule(callback: CallbackQuery):
             text += f"ID:{r[0]} | {r[1]} -> {r[2]} в {r[3]} (статус: {r[4]})\n"
         await callback.message.answer(text)
 
-# Запрос ID для отметки визита
 @dp.callback_query(lambda c: c.data == "mark_visited_prompt")
 async def prompt_mark_visited(callback: CallbackQuery, state: FSMContext):
-    await state.set_state(AdminMarkVisit.waiting_for_appointment_id)
+    await state.set_state(AdminMarkVisit.waiting_for_id)
     await callback.message.answer("Введите ID записи, которую хотите отметить как посещённую (цифру).")
 
-@dp.message(AdminMarkVisit.waiting_for_appointment_id)
+@dp.message(AdminMarkVisit.waiting_for_id)
 async def mark_visited(message: types.Message, state: FSMContext):
     try:
         app_id = int(message.text.strip())
@@ -417,10 +399,8 @@ async def mark_visited(message: types.Message, state: FSMContext):
         await message.answer("Ошибка: введите корректный ID.")
     await state.clear()
 
-# Отчёт (запуск)
 @dp.callback_query(lambda c: c.data == "report_start")
 async def report_start(callback: CallbackQuery):
-    # Упрощённый вариант: отчёт за сегодня
     today = datetime.now().strftime("%Y-%m-%d")
     conn = sqlite3.connect(DB_NAME)
     cur = conn.cursor()
@@ -428,21 +408,18 @@ async def report_start(callback: CallbackQuery):
     rows = cur.fetchall()
     conn.close()
     total = len(rows)
-    missed = sum(1 for r in rows if r[0] == 'missed')  # Нет статуса missed по умолчанию
+    missed = sum(1 for r in rows if r[0] == 'missed')
     rescheduled = sum(1 for r in rows if r[0] == 'rescheduled')
     await callback.message.answer(f"📊 Отчёт за {today}:\nВсего записей: {total}\nНеявок: {missed}\nПереносов: {rescheduled}")
 
-# Мои записи (пациент)
 @dp.callback_query(lambda c: c.data == "my_appointments")
 async def my_appointments(callback: CallbackQuery):
-    user_id = 1  # временно
+    user_id = 1   # временно
     conn = sqlite3.connect(DB_NAME)
     cur = conn.cursor()
-    cur.execute('''
-        SELECT a.id, d.name, a.date, a.time, a.status
-        FROM appointments a JOIN doctors d ON a.doctor_id=d.id
-        WHERE a.user_id=?
-    ''', (user_id,))
+    cur.execute('''SELECT a.id, d.name, a.date, a.time, a.status
+                   FROM appointments a JOIN doctors d ON a.doctor_id=d.id
+                   WHERE a.user_id=?''', (user_id,))
     rows = cur.fetchall()
     conn.close()
     if not rows:
@@ -453,18 +430,15 @@ async def my_appointments(callback: CallbackQuery):
             text += f"ID:{r[0]} | {r[1]} | {r[2]} в {r[3]} (статус: {r[4]})\n"
         await callback.message.answer(text)
 
-# Расписание врача
 @dp.callback_query(lambda c: c.data == "my_schedule")
 async def doctor_schedule(callback: CallbackQuery):
-    doctor_id = 1  # временно
+    doctor_id = 1   # временно
     today = datetime.now().strftime("%Y-%m-%d")
     conn = sqlite3.connect(DB_NAME)
     cur = conn.cursor()
-    cur.execute('''
-        SELECT a.time, u.name, a.status
-        FROM appointments a JOIN users u ON a.user_id=u.id
-        WHERE a.doctor_id=? AND a.date=?
-    ''', (doctor_id, today))
+    cur.execute('''SELECT a.time, u.name, a.status
+                   FROM appointments a JOIN users u ON a.user_id=u.id
+                   WHERE a.doctor_id=? AND a.date=?''', (doctor_id, today))
     rows = cur.fetchall()
     conn.close()
     if not rows:
@@ -475,7 +449,34 @@ async def doctor_schedule(callback: CallbackQuery):
             text += f"{r[0]} - {r[1]} (статус: {r[2]})\n"
         await callback.message.answer(text)
 
+# ==================== НАПОМИНАНИЯ ====================
+async def reminders_checker():
+    while True:
+        now = datetime.now()
+        target_time = (now + timedelta(days=1)).replace(hour=9, minute=0, second=0, microsecond=0)
+        wait_seconds = (target_time - now).total_seconds()
+        if wait_seconds < 0:
+            wait_seconds = 60
+        await asyncio.sleep(wait_seconds)
+        # Отправка напоминаний
+        tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+        conn = sqlite3.connect(DB_NAME)
+        cur = conn.cursor()
+        cur.execute('''SELECT a.id, u.phone, u.name, d.name, a.time
+                       FROM appointments a
+                       JOIN users u ON a.user_id=u.id
+                       JOIN doctors d ON a.doctor_id=d.id
+                       WHERE a.date=? AND a.status='confirmed' ''', (tomorrow,))
+        rows = cur.fetchall()
+        conn.close()
+        for row in rows:
+            # Ищем chat_id по номеру телефона (упрощённо, не реализовано хранение chat_id)
+            # В реальном проекте нужно хранить chat_id в таблице users.
+            pass  # Здесь надо доработать
+
+# Запуск
 async def main():
+    asyncio.create_task(reminders_checker())
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
