@@ -4,10 +4,10 @@
 import asyncio
 import logging
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton, CallbackQuery
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -19,6 +19,7 @@ logging.basicConfig(level=logging.INFO)
 
 DB_NAME = "rehamed.db"
 
+# ========== БАЗА ДАННЫХ ==========
 def init_db():
     conn = sqlite3.connect(DB_NAME)
     cur = conn.cursor()
@@ -72,6 +73,7 @@ def populate_initial_data():
 init_db()
 populate_initial_data()
 
+# ========== ФУНКЦИИ БАЗЫ ДАННЫХ ==========
 def get_user_by_chat_id(chat_id):
     conn = sqlite3.connect(DB_NAME)
     cur = conn.cursor()
@@ -119,7 +121,7 @@ def get_doctors_by_service(service_name):
     conn.close()
     return rows
 
-# --------------------- КЛАВИАТУРЫ ---------------------
+# ========== КЛАВИАТУРЫ ==========
 def main_menu(role='patient'):
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📝 Записаться", callback_data="book")],
@@ -149,13 +151,11 @@ def doctors_keyboard(service_name):
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 def dates_keyboard(doctor_id):
-    # Заглушка: показываем несколько ближайших дней
-    buttons = []
-    from datetime import timedelta
     today = datetime.now().date()
+    buttons = []
     for i in range(1, 6):
         d = today + timedelta(days=i)
-        if d.weekday() < 5:  # рабочие
+        if d.weekday() < 5:  # только рабочие
             buttons.append([InlineKeyboardButton(text=d.strftime("%d.%m.%Y"), callback_data=f"date_{d.year}_{d.month}_{d.day}_{doctor_id}")])
     buttons.append([InlineKeyboardButton(text="🔙 Назад", callback_data="book")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -166,7 +166,7 @@ def time_keyboard():
     buttons.append([InlineKeyboardButton(text="🔙 Назад", callback_data="book")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
-# --------------------- СОСТОЯНИЯ ---------------------
+# ========== СОСТОЯНИЯ ==========
 class BookingState(StatesGroup):
     choosing_service = State()
     choosing_doctor = State()
@@ -177,10 +177,9 @@ class BookingState(StatesGroup):
 class AdminMarkVisit(StatesGroup):
     waiting_for_id = State()
 
-# --------------------- ХЭНДЛЕРЫ ---------------------
+# ========== ХЭНДЛЕРЫ ==========
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
-    # Согласие на ПД
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="✅ Принимаю", callback_data="agree_pd")]
     ])
@@ -369,7 +368,6 @@ async def my_appointments(callback: CallbackQuery):
 async def doctor_schedule(callback: CallbackQuery):
     await callback.message.answer("Функция для врачей в разработке (для диплома используйте скриншоты из админки).")
 
-# Запуск
 async def main():
     await dp.start_polling(bot)
 
