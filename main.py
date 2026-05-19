@@ -83,11 +83,11 @@ def get_user_by_chat_id(chat_id):
     conn.close()
     return row
 
-def register_user(phone, name, chat_id):
+def register_user(phone, name, chat_id, role='patient'):
     conn = sqlite3.connect(DB_NAME)
     cur = conn.cursor()
     try:
-        cur.execute("INSERT INTO users (phone, role, name, chat_id) VALUES (?, 'patient', ?, ?)", (phone, name, chat_id))
+        cur.execute("INSERT INTO users (phone, role, name, chat_id) VALUES (?, ?, ?, ?)", (phone, role, name, chat_id))
         user_id = cur.lastrowid
         conn.commit()
         conn.close()
@@ -95,6 +95,13 @@ def register_user(phone, name, chat_id):
     except:
         conn.close()
         return None
+
+def update_user_role(chat_id, new_role):
+    conn = sqlite3.connect(DB_NAME)
+    cur = conn.cursor()
+    cur.execute("UPDATE users SET role=? WHERE chat_id=?", (new_role, chat_id))
+    conn.commit()
+    conn.close()
 
 def create_appointment_demo(user_id, doctor_id, service, date_str, time_str):
     conn = sqlite3.connect(DB_NAME)
@@ -162,13 +169,11 @@ def calendar_keyboard(year, month, doctor_id):
                 row.append(InlineKeyboardButton(text=" ", callback_data="ignore"))
             else:
                 date_obj = datetime(year, month, day).date()
-                # исключаем прошлые дни и выходные
                 if date_obj < now or date_obj.weekday() >= 5:
                     row.append(InlineKeyboardButton(text=f"{day}", callback_data="ignore"))
                 else:
                     row.append(InlineKeyboardButton(text=f"{day}", callback_data=f"date_{year}_{month}_{day}_{doctor_id}"))
         kb_buttons.append(row)
-    # навигация
     prev_month = month - 1 if month > 1 else 12
     prev_year = year if month > 1 else year - 1
     next_month = month + 1 if month < 12 else 1
@@ -199,7 +204,48 @@ class BookingState(StatesGroup):
 class AdminMarkVisit(StatesGroup):
     waiting_for_id = State()
 
-# ========== ХЭНДЛЕРЫ ==========
+# ========== ХЭНДЛЕРЫ КОМАНД ДЛЯ СМЕНЫ РОЛИ ==========
+@dp.message(Command("admin"))
+async def set_admin(message: types.Message):
+    chat_id = message.chat.id
+    user = get_user_by_chat_id(chat_id)
+    if user:
+        update_user_role(chat_id, 'admin')
+        await message.answer("Роль изменена на **Администратор**. Перезапустите меню командой /start или нажмите «Главное меню».", parse_mode="Markdown")
+    else:
+        await message.answer("Сначала зарегистрируйтесь через /start")
+
+@dp.message(Command("doctor"))
+async def set_doctor(message: types.Message):
+    chat_id = message.chat.id
+    user = get_user_by_chat_id(chat_id)
+    if user:
+        update_user_role(chat_id, 'doctor')
+        await message.answer("Роль изменена на **Врач**. Перезапустите меню командой /start или нажмите «Главное меню».", parse_mode="Markdown")
+    else:
+        await message.answer("Сначала зарегистрируйтесь через /start")
+
+@dp.message(Command("deputy"))
+async def set_deputy(message: types.Message):
+    chat_id = message.chat.id
+    user = get_user_by_chat_id(chat_id)
+    if user:
+        update_user_role(chat_id, 'deputy')
+        await message.answer("Роль изменена на **Заместитель директора**. Перезапустите меню командой /start или нажмите «Главное меню».", parse_mode="Markdown")
+    else:
+        await message.answer("Сначала зарегистрируйтесь через /start")
+
+@dp.message(Command("patient"))
+async def set_patient(message: types.Message):
+    chat_id = message.chat.id
+    user = get_user_by_chat_id(chat_id)
+    if user:
+        update_user_role(chat_id, 'patient')
+        await message.answer("Роль изменена на **Пациент**. Перезапустите меню командой /start или нажмите «Главное меню».", parse_mode="Markdown")
+    else:
+        await message.answer("Сначала зарегистрируйтесь через /start")
+
+# ========== ОСНОВНЫЕ ХЭНДЛЕРЫ ==========
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -224,7 +270,7 @@ async def handle_contact(message: types.Message):
     chat_id = message.chat.id
     user = get_user_by_chat_id(chat_id)
     if not user:
-        register_user(phone, name, chat_id)
+        register_user(phone, name, chat_id, 'patient')
         role = 'patient'
     else:
         role = user[2]
@@ -321,6 +367,7 @@ async def confirm_no(callback: CallbackQuery, state: FSMContext):
     await callback.message.edit_text("Запись отменена.")
     await callback.message.answer("Главное меню:", reply_markup=main_menu('patient'))
 
+# ---------- Администратор: расписание на сегодня (с демо-примерами) ----------
 @dp.callback_query(lambda c: c.data == "today_schedule")
 async def today_schedule(callback: CallbackQuery):
     today = datetime.now().strftime("%Y-%m-%d")
@@ -334,7 +381,9 @@ async def today_schedule(callback: CallbackQuery):
     rows = cur.fetchall()
     conn.close()
     if not rows:
-        await callback.message.answer("На сегодня записей нет.")
+        # Демо-данные для скриншота
+        demo_text = "📋 Записи на сегодня (демо-пример):\nID:101 | Иванов И.И. -> Мостовая Н.В. в 10:00 (статус: confirmed)\nID:102 | Петрова М.С. -> Тагунова Т.И. в 11:30 (статус: confirmed)\n"
+        await callback.message.answer(demo_text)
     else:
         text = "📋 Записи на сегодня:\n"
         for r in rows:
@@ -360,6 +409,7 @@ async def mark_visited(message: types.Message, state: FSMContext):
         await message.answer("Ошибка: введите корректный ID.")
     await state.clear()
 
+# ---------- Заместитель директора: отчёт (с демо-примерами) ----------
 @dp.callback_query(lambda c: c.data == "report_start")
 async def report_start(callback: CallbackQuery):
     today = datetime.now().strftime("%Y-%m-%d")
@@ -368,11 +418,16 @@ async def report_start(callback: CallbackQuery):
     cur.execute("SELECT status FROM appointments WHERE date=?", (today,))
     rows = cur.fetchall()
     conn.close()
-    total = len(rows)
-    missed = sum(1 for r in rows if r[0] == 'missed')
-    rescheduled = sum(1 for r in rows if r[0] == 'rescheduled')
-    await callback.message.answer(f"📊 Отчёт за {today}:\nВсего записей: {total}\nНеявок: {missed}\nПереносов: {rescheduled}")
+    if not rows:
+        # Демо-отчёт
+        await callback.message.answer(f"📊 Отчёт за {today} (демо-пример):\nВсего записей: 8\nНеявок: 1\nПереносов: 2")
+    else:
+        total = len(rows)
+        missed = sum(1 for r in rows if r[0] == 'missed')
+        rescheduled = sum(1 for r in rows if r[0] == 'rescheduled')
+        await callback.message.answer(f"📊 Отчёт за {today}:\nВсего записей: {total}\nНеявок: {missed}\nПереносов: {rescheduled}")
 
+# ---------- Пациент: мои записи ----------
 @dp.callback_query(lambda c: c.data == "my_appointments")
 async def my_appointments(callback: CallbackQuery):
     chat_id = callback.message.chat.id
@@ -389,16 +444,19 @@ async def my_appointments(callback: CallbackQuery):
     rows = cur.fetchall()
     conn.close()
     if not rows:
-        await callback.message.answer("У вас пока нет записей.")
+        # Демо-записи для скриншота
+        await callback.message.answer("Ваши записи (демо-пример):\nID:101 | Мостовая Н.В. | 2025-05-25 в 10:00 (статус: confirmed)\nID:102 | Тагунова Т.И. | 2025-05-26 в 11:30 (статус: confirmed)")
     else:
         text = "Ваши записи:\n"
         for r in rows:
             text += f"ID:{r[0]} | {r[1]} | {r[2]} в {r[3]} (статус: {r[4]})\n"
         await callback.message.answer(text)
 
+# ---------- Врач: моё расписание (демо-пример) ----------
 @dp.callback_query(lambda c: c.data == "my_schedule")
 async def doctor_schedule(callback: CallbackQuery):
-    await callback.message.answer("Функция для врачей в разработке (для диплома используйте скриншоты из админки).")
+    # Для диплома достаточно демо-примера
+    await callback.message.answer("🩺 Ваше расписание на сегодня (демо-пример):\n10:00 - Иванов И.И. (статус: confirmed)\n11:30 - Петрова М.С. (статус: confirmed)")
 
 async def main():
     await dp.start_polling(bot)
